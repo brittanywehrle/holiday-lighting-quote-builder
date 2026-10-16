@@ -17,7 +17,7 @@ It is **not** customer-facing. Customers only ever see the PDF.
 - Installed on iPads with Safari's **Add to Home Screen** (`manifest.webmanifest`, `icons/`). `sw.js` makes it work offline: network first, cached fallback.
 - All data lives **on each device** in IndexedDB. There is no server or database yet. Devices don't sync; **Back up all jobs** and **Restore backup** on the Jobs tab move data between devices.
 - Photos are stored as JPEG **data URLs (strings), never Blobs**. iPad Safari failed to display Blobs read back from IndexedDB, so keep it this way.
-- Vendored, self-hosted dependencies so it works offline: `vendor/jspdf.umd.min.js` (2.5.1) and `fonts/` (Noto Sans 400/400i/600/700, Noto Serif 800).
+- Vendored, self-hosted dependencies so it works offline: `vendor/jspdf.umd.min.js` (2.5.1), `vendor/exceljs.min.js` (4.4.0, loaded only when exporting), and `fonts/` (Noto Sans 400/400i/600/700, Noto Serif 800).
 - Saving files: on touch devices, `offerFile()` opens the iOS share sheet (`navigator.share`). Elsewhere it triggers a normal download. iOS only allows the share sheet right after a tap, so if file prep is slow a "Ready to share" bar appears and the next tap shares it. Proposal PDF/PNG blobs are pre-built after the proposal renders for the same reason.
 
 ## Code map (`app.js`, top to bottom)
@@ -33,6 +33,7 @@ It is **not** customer-facing. Customers only ever see the PDF.
 | trace editor | canvas, pointer/pinch gestures, tools, undo history, options panel |
 | photos | resize to max 2000px, data URLs, sample-house fallback |
 | views | jobs list, quote, proposal, settings |
+| Excel tracker | `exportTracker()`: one row per job (sample excluded), option names/prices side by side, Status dropdown |
 | proposal | canvas-drawn letter pages at 1700×2200 → jsPDF |
 
 ## Data model
@@ -45,7 +46,8 @@ job: { id, customer{name,address,phone,email}, status, photoId, photoW, photoH,
        activeOpt, renderings{ '<optId>:<warm|multi>': photoId },
        quote{ newCustomer, rate, buffer, fees{}, wreathMarkup, garlandMarkup,
               garlandCost, garlandLen, mockups ('both'|'warm'|'multi'), snapshot },
-       proposalNo }
+       proposalNo, status, sentAt }
+status: 'draft'|'sent'|'approved'|'scheduled'|'completed'|'declined'  (older values are migrated in normalizeJob)
 shape: { id, type: 'c9'|'garland'|'wreath'|'window', points:[{x,y}] (photo pixels), size, cost, lit }
 ```
 
@@ -63,6 +65,12 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 - Saving a proposal **locks the rates** for that job (`quote.snapshot`), so later Settings changes don't alter a sent quote.
 - **Proposal numbers** come from Settings (`nextProposalNo`, starting at 31), are assigned once per job, and increment by one.
 
+## Job tracking & Excel export
+
+- **Statuses:** Draft, Sent, Approved, Scheduled, Completed, Declined. You set them on the Jobs tab. Sharing a proposal moves a Draft to Sent and records `sentAt`.
+- **Export to Excel** (Jobs tab) builds `Wehrle Jobs Tracker YYYY-MM-DD.xlsx` with these columns: Proposal #, Customer, Address, Phone, Email, Status (dropdown), Created, Date sent, New customer, Startup fee, then Option N and Option N price for each option.
+- **The app is the source of truth.** Excel is a snapshot that you re-export when you want a fresh copy. Status changes made in Excel do not flow back.
+
 ## Proposal layout (owner-approved wording)
 
 - **Option pages:** page 1 has the full header (logo, date, proposal number, "Prepared for"). Later option pages use a compact header. Each page shows the mockups (warm white and/or multicolor, or an uploaded AI rendering), the line items, then this line: *"Includes lighting lease, professional installation, timer setup, in-season light maintenance, takedown and storage."*
@@ -74,7 +82,7 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 
 - **Colors:** red `#C1121F`, green `#1B5E3B`, gold `#D4A537`, warm white bulbs `#FFD58A`, black text `#111`.
 - **Type:** Noto Serif 800 for "WEHRLE" and headings, Noto Sans for everything else (the owners chose these).
-- **Logo:** a gable roofline of alternating red and green bulbs with gold outlines, "WEHRLE" below, then "HOLIDAY LIGHTING" and a gold rule with the tagline (drawn in `drawLogo`).
+- **Logo:** `assets/logo.png` (transparent PNG: a dark green roofline with C9 bulbs, "WEHRLE", "HOLIDAY LIGHTING" in red, and the tagline). It's used at the top of proposal page 1; `drawLogo()` is only a fallback if the image fails to load. The icons in `icons/` are the roofline and "WEHRLE" cropped from it, on white.
 
 ## Working on it
 
@@ -85,6 +93,9 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 - Deploy: push to `main`, and Cloudflare Pages publishes in about a minute. No build command; the output directory is the repo root.
 
 ## Roadmap (agreed, not built)
+
+- Auto-sync jobs to a Google Sheet (one row per job, upserted on share/status change/edit) through a Google Apps Script web app whose URL is pasted into Settings. One-way, with the app as master. Keep the Excel export as a backup.
+- Website contact-form leads flow into a **New leads** list in the app. The plan: the website Worker saves form submissions to a shared Cloudflare D1 database, and the app reads them. Deferred until lead volume justifies it.
 
 - Sync jobs between devices (move `Store` to a cloud DB, such as Cloudflare D1/R2 or Supabase).
 - Automatic AI night renderings through a Cloudflare Pages Function, so the API key stays server-side.

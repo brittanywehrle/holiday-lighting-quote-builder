@@ -113,6 +113,8 @@ function normalizeJob(job) {
     if (job.renderings) { const r = {}; for (const [k, v] of Object.entries(job.renderings)) r[k.includes(':') ? k : o.id + ':' + k] = v; job.renderings = r; }
   }
   delete job.shapes; delete q.siteC9; delete q.siteGarland; delete q.custom;
+  job.status = ({ accepted: 'approved', installed: 'completed', removed: 'completed' })[job.status] || job.status || 'draft';
+  if (!job.sentAt && q.snapshot && q.snapshot.at) job.sentAt = q.snapshot.at;
   if (!Array.isArray(job.windows)) job.windows = [];
   job.options.forEach(o => { if (!Array.isArray(o.shapes)) o.shapes = []; if (!Array.isArray(o.custom)) o.custom = []; if (o.name == null) o.name = ''; });
   if (!job.options.some(o => o.id === job.activeOpt)) job.activeOpt = job.options[0].id;
@@ -713,10 +715,12 @@ async function openJob(id) {
 }
 
 /* ---------- jobs view ---------- */
-const STATUSES = ['draft', 'sent', 'accepted', 'installed', 'removed'];
+const STATUSES = ['draft', 'sent', 'approved', 'scheduled', 'completed', 'declined'];
+const statusLabel = s => s ? s[0].toUpperCase() + s.slice(1) : '';
 async function renderJobs() {
   const el = $('#v-jobs'); const jobs = S.jobs.slice().sort((a, b) => b.updatedAt - a.updatedAt);
   let h = `<div class="row" style="justify-content:space-between"><h1>Jobs</h1><div class="row">
+    <button class="btn" id="btn-xlsx">Export to Excel</button>
     <button class="btn" id="btn-export">Back up all jobs</button>
     <label class="btn" for="import-file">Restore backup</label><input type="file" id="import-file" accept=".json,application/json" hidden>
     <button class="btn primary" id="btn-new">New job</button></div></div>`;
@@ -743,7 +747,7 @@ async function renderJobs() {
         <div class="row" style="justify-content:space-between"><div class="name">${esc(j.customer.name)}</div><span class="chip ${j.status}">${j.status}</span></div>
         <div class="meta">${esc(j.customer.address || 'No address')}</div>
         <div class="row" style="justify-content:space-between"><span class="total">${priceTxt}</span><span class="muted num" style="font-size:13px">${all.length > 1 ? '' : q.c9Ft ? q.c9Ft + ' ft C9' : 'Not measured'}</span></div>
-        <label class="f" for="st-${j.id}">Status<select id="st-${j.id}" data-status="${j.id}">${STATUSES.map(s => `<option value="${s}" ${s === j.status ? 'selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select></label>
+        <label class="f" for="st-${j.id}">Status<select id="st-${j.id}" data-status="${j.id}">${STATUSES.map(s => `<option value="${s}" ${s === j.status ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}</select></label>
         <div class="row" style="margin-top:auto">
           <button class="btn primary small" data-open="${j.id}">Open</button>
           ${del ? `<button class="btn danger small" data-del-yes="${j.id}">Delete for good</button><button class="btn small" data-del-no="1">Keep</button>` : `<button class="btn small" data-del="${j.id}">Delete</button>`}
@@ -758,6 +762,7 @@ $('#v-jobs').addEventListener('click', async e => {
   if (t.id === 'btn-new') { S.newOpen = true; renderJobs().then(() => $('#nj-name').focus()); }
   else if (t.id === 'btn-new-cancel') { S.newOpen = false; renderJobs(); }
   else if (t.id === 'btn-export') exportBackup();
+  else if (t.id === 'btn-xlsx') exportTracker();
   else if (t.dataset.open) openJob(t.dataset.open);
   else if (t.dataset.del) { S.confirmDel = t.dataset.del; renderJobs(); }
   else if (t.dataset.delNo) { S.confirmDel = null; renderJobs(); }
@@ -782,6 +787,57 @@ $('#v-jobs').addEventListener('submit', async e => {
   S.newOpen = false; await openJob(job.id);
   if (!f) toast('Add a photo with Replace photo to start tracing.');
 });
+
+/* ---------- Excel job tracker ----------
+   One row per job (sample job excluded). The app is the source of truth: statuses changed in
+   Excel don't flow back, so the workbook is re-exported whenever a fresh copy is wanted. */
+function loadScriptOnce(src) {
+  return new Promise((res, rej) => {
+    if (document.querySelector(`script[data-src="${src}"]`)) return res();
+    const s = document.createElement('script'); s.src = src; s.dataset.src = src; s.onload = () => res(); s.onerror = () => rej(new Error('load ' + src));
+    document.head.appendChild(s);
+  });
+}
+async function exportTracker() {
+  const jobs = S.jobs.filter(j => !isSample(j)).sort((a, b) => (b.proposalNo || 0) - (a.proposalNo || 0) || b.createdAt - a.createdAt);
+  if (!jobs.length) return toast('No jobs to export yet. The sample job is left out.');
+  try { if (!window.ExcelJS) await loadScriptOnce('vendor/exceljs.min.js'); }
+  catch (e) { return toast("The Excel tool didn't load. Check the connection and try again."); }
+  const maxOpts = Math.max(...jobs.map(j => j.options.length));
+  const wb = new window.ExcelJS.Workbook(); wb.creator = S.settings.company.name;
+  const ws = wb.addWorksheet('Jobs', { views: [{ state: 'frozen', ySplit: 1 }] });
+  const cols = [
+    { header: 'Proposal #', key: 'no', width: 11 }, { header: 'Customer', key: 'name', width: 26 },
+    { header: 'Address', key: 'address', width: 34 }, { header: 'Phone', key: 'phone', width: 15 },
+    { header: 'Email', key: 'email', width: 28 }, { header: 'Status', key: 'status', width: 13 },
+    { header: 'Created', key: 'created', width: 12 }, { header: 'Date sent', key: 'sent', width: 12 },
+    { header: 'New customer', key: 'newc', width: 13 }, { header: 'Startup fee', key: 'startup', width: 12 }
+  ];
+  for (let i = 1; i <= maxOpts; i++) cols.push({ header: `Option ${i}`, key: 'o' + i, width: 26 }, { header: `Option ${i} price`, key: 'p' + i, width: 15 });
+  ws.columns = cols;
+  const day = t => { if (!t) return null; const d = new Date(t); return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); };
+  for (const j of jobs) {
+    const row = { no: j.proposalNo || null, name: j.customer.name, address: j.customer.address || '', phone: j.customer.phone || '', email: j.customer.email || '',
+      status: statusLabel(j.status), created: day(j.createdAt), sent: day(j.sentAt), newc: j.quote.newCustomer ? 'Yes' : 'No', startup: 0 };
+    j.options.forEach((o, i) => {
+      const r = computeQuote(viewOf(j, o), S.settings);
+      if (i === 0) row.startup = r.deposit;
+      row['o' + (i + 1)] = o.name || `Option ${i + 1}`; row['p' + (i + 1)] = Math.round(r.total * 100) / 100;
+    });
+    ws.addRow(row);
+  }
+  const head = ws.getRow(1); head.font = { bold: true, color: { argb: 'FFFFFFFF' } }; head.height = 22;
+  head.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B5E3B' } }; c.alignment = { vertical: 'middle' }; });
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
+  const money$ = '"$"#,##0.00', date$ = 'mmm d, yyyy';
+  ws.getColumn('startup').numFmt = money$; ws.getColumn('created').numFmt = date$; ws.getColumn('sent').numFmt = date$;
+  for (let i = 1; i <= maxOpts; i++) ws.getColumn('p' + i).numFmt = money$;
+  const statusCol = cols.findIndex(c => c.key === 'status') + 1, list = '"' + STATUSES.map(statusLabel).join(',') + '"';
+  const colL = ws.getColumn(statusCol).letter;
+  ws.dataValidations.add(`${colL}2:${colL}${jobs.length + 200}`, { type: 'list', allowBlank: true, formulae: [list], showErrorMessage: true, errorTitle: 'Status', error: 'Pick a status from the list.' });
+  const buf = await wb.xlsx.writeBuffer();
+  await offerFile(`Wehrle Jobs Tracker ${new Date().toISOString().slice(0, 10)}.xlsx`, new Blob([buf]), 'Tracker exported.');
+}
 
 /* ---------- backup ---------- */
 async function exportBackup() {
@@ -810,7 +866,7 @@ async function importBackup(file) {
    Computers: a normal download. iOS only opens the share sheet right after a tap, so if
    preparing a file took too long, a "ready" bar appears and the next tap shares it. */
 const IS_TOUCH = (navigator.maxTouchPoints || 0) > 1 || /iPad|iPhone|iPod|Android/.test(navigator.userAgent);
-const MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', json: 'application/json' };
+const MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', json: 'application/json', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 function asFile(filename, data) { const ext = filename.split('.').pop().toLowerCase(); return new File([data], filename, { type: MIME[ext] || 'application/octet-stream' }); }
 function canShareFile(file) { try { return IS_TOUCH && !!navigator.share && !!navigator.canShare && navigator.canShare({ files: [file] }); } catch (e) { return false; } }
 function downloadFile(file) {
@@ -989,7 +1045,8 @@ function roundImg(ctx, img, x, y, w, h, r) { ctx.save(); ctx.beginPath(); ctx.ro
 function proposalHeader(g, job, shortId, date) {
   const c = S.settings.company;
   g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, PW, PH);
-  drawLogo(g, M - 40, 70, 560);
+  if (PROPOSAL_LOGO) { const lw = 600, lh = lw * PROPOSAL_LOGO.naturalHeight / PROPOSAL_LOGO.naturalWidth; g.drawImage(PROPOSAL_LOGO, M - 6, 62, lw, lh); }
+  else drawLogo(g, M - 40, 70, 560);
   g.font = '700 30px "Noto Sans", sans-serif'; g.fillStyle = '#C1121F'; spaced(g, 'LIGHTING PROPOSAL', PW - M, 150, 6, 'right');
   txt(g, date, PW - M, 205, '600 30px "Noto Sans", sans-serif', '#111111', 'right');
   txt(g, 'Proposal #' + shortId, PW - M, 250, '400 26px "Noto Sans", sans-serif', '#555555', 'right');
@@ -1136,8 +1193,10 @@ function buildTermsPage(job, shortId, results) {
   footer(h2);
   return p2;
 }
+let PROPOSAL_LOGO = null;
 async function buildProposal(job) {
   await fontsReady();
+  if (!PROPOSAL_LOGO) { try { PROPOSAL_LOGO = await loadImg('assets/logo.png'); } catch (e) { PROPOSAL_LOGO = null; } }
   const st = S.settings;
   if (!job.proposalNo) { job.proposalNo = Math.max(1, Math.round(num(st.nextProposalNo, 31))); st.nextProposalNo = job.proposalNo + 1; touchSettings(); touchJob(); }
   const shortId = String(job.proposalNo);
@@ -1194,7 +1253,7 @@ async function renderRenderSlots(job) {
   }
   box.innerHTML = h;
 }
-function lockRates(job) { if (!job.quote.snapshot) job.quote.snapshot = { at: Date.now(), rates: currentRates(S.settings) }; if (job.status === 'draft') job.status = 'sent'; touchJob(); }
+function lockRates(job) { if (!job.quote.snapshot) job.quote.snapshot = { at: Date.now(), rates: currentRates(S.settings) }; if (!job.sentAt) job.sentAt = Date.now(); if (job.status === 'draft') job.status = 'sent'; touchJob(); }
 const fileBase = job => `Wehrle Proposal - ${job.customer.name.replace(/[^\w\s-]/g, '').replace(/\s+/g, ' ').trim() || 'Customer'}`;
 $('#v-proposal').addEventListener('change', async e => {
   if (e.target.id === 'p-mock') { S.job.quote.mockups = e.target.value; touchJob(); renderProposal(); }
