@@ -1,0 +1,16 @@
+{
+  "name": "Wehrle Quote Builder",
+  "short_name": "Wehrle Quotes",
+  "description": "Trace a house photo, preview it lit up at night, price the job, and send a proposal.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0E1613",
+  "theme_color": "#0E1613",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
