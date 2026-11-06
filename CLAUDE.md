@@ -34,6 +34,7 @@ It is **not** customer-facing. Customers only ever see the PDF.
 | photos | resize to max 2000px, data URLs, sample-house fallback |
 | views | jobs list, quote, proposal, settings |
 | Excel tracker | `exportTracker()`: one row per job (sample excluded), option names/prices side by side, Status dropdown |
+| Google Sheet sync | `Sheet` module: queue, `flush()`, `syncAll()`; wraps `Store.saveJob`/`deleteJob` |
 | proposal | canvas-drawn letter pages at 1700×2200 → jsPDF |
 
 ## Data model
@@ -69,7 +70,16 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 
 - **Statuses:** Draft, Sent, Approved, Scheduled, Completed, Declined. You set them on the Jobs tab. Sharing a proposal moves a Draft to Sent and records `sentAt`.
 - **Export to Excel** (Jobs tab) builds `Wehrle Jobs Tracker YYYY-MM-DD.xlsx` with these columns: Proposal #, Customer, Address, Phone, Email, Status (dropdown), Created, Date sent, New customer, Startup fee, then Option N and Option N price for each option.
-- **The app is the source of truth.** Excel is a snapshot that you re-export when you want a fresh copy. Status changes made in Excel do not flow back.
+- **The app is the source of truth.** Excel is a backup snapshot (the live copy is the Google Sheet, below) that you re-export when you want a fresh copy. Status changes made in Excel do not flow back.
+
+## Google Sheet sync
+
+- **One-way, app is master.** Every `Store.saveJob` / `Store.deleteJob` (wrapped right after the `Sheet` module in `app.js`) queues that job; the sample job is skipped. The queue lives in IndexedDB (`kv.sheetQueue`) and is posted, batched and debounced about 4 s, to the Apps Script Web app URL in Settings (`settings.sheetUrl`).
+- The body is sent as plain text on purpose: that keeps the request "simple" so the browser skips a CORS preflight, which Apps Script can't answer. The script replies with JSON `{ ok, error }`.
+- Offline or failed sends stay queued and retry on `online`, on reopening the app, and every 60 s after a failure. A warning shows on the Jobs tab while it's behind; Settings shows status and a **Sync all jobs now** button (also runs when the link is first pasted).
+- Sheet side: `google-sheet/sync.gs`, pasted into the sheet's Apps Script and deployed as a Web app (Execute as Me, access Anyone). Owned by the Google account samuel.w.wehrle@gmail.com. It upserts by a hidden **Job ID** column, appends new columns (e.g. Option 3) on the right, blanks options a job no longer has, removes rows for deleted jobs, and formats money, dates, phone and the Status dropdown.
+- Columns: Job ID (hidden), Proposal #, Customer, Address, Phone, Email, Status, Created, Date sent, New customer, Startup fee, Last updated, then Option N / Option N price. Dates are sent as the iPad's local `YYYY-MM-DD[ HH:MM]` so the sheet's time zone doesn't shift them.
+- If `sync.gs` changes, the owner must redeploy: Deploy → Manage deployments → edit → Version: New version (the URL stays the same).
 
 ## Proposal layout (owner-approved wording)
 
@@ -94,7 +104,6 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 
 ## Roadmap (agreed, not built)
 
-- Auto-sync jobs to a Google Sheet (one row per job, upserted on share/status change/edit) through a Google Apps Script web app whose URL is pasted into Settings. One-way, with the app as master. Keep the Excel export as a backup.
 - Website contact-form leads flow into a **New leads** list in the app. The plan: the website Worker saves form submissions to a shared Cloudflare D1 database, and the app reads them. Deferred until lead volume justifies it.
 
 - Sync jobs between devices (move `Store` to a cloud DB, such as Cloudflare D1/R2 or Supabase).

@@ -75,7 +75,7 @@ function defaultSettings() {
   return {
     company: { name: 'Wehrle Holiday Lighting', phone: '', email: '', website: '', area: '' },
     paymentLink: '', rateC9: 7, startup: 349, bufferPct: 10, wreathMarkup: 2, garlandMarkup: 2, defaultSpacing: 15,
-    garlandCost: 24, garlandLen: 9, wreathCost: 30, fees: [], terms: DEFAULT_TERMS.slice(), termsVersion: 2, customerNote: DEFAULT_CUSTOMER_NOTE, nextProposalNo: 31
+    garlandCost: 24, garlandLen: 9, wreathCost: 30, fees: [], terms: DEFAULT_TERMS.slice(), termsVersion: 2, customerNote: DEFAULT_CUSTOMER_NOTE, nextProposalNo: 31, sheetUrl: ''
   };
 }
 function mergeSettings(s) {
@@ -724,6 +724,7 @@ async function renderJobs() {
     <button class="btn" id="btn-export">Back up all jobs</button>
     <label class="btn" for="import-file">Restore backup</label><input type="file" id="import-file" accept=".json,application/json" hidden>
     <button class="btn primary" id="btn-new">New job</button></div></div>`;
+  if (Sheet.problem()) h += `<div class="warnbox" style="margin-top:12px">Google Sheet sync is behind: ${esc(Sheet.problem())} It retries on its own, or tap <b>Sync all jobs now</b> in Settings.</div>`;
   if (!Store.onDevice) h += `<div class="warnbox" style="margin-top:12px">This browser isn't letting the app save to the device, so jobs only last until you close it. Open it from the Home Screen icon, or back up before closing.</div>`;
   h += `<form class="card newjob" id="newjob" ${S.newOpen ? '' : 'hidden'}>
     <h2>New job</h2>
@@ -838,6 +839,94 @@ async function exportTracker() {
   const buf = await wb.xlsx.writeBuffer();
   await offerFile(`Wehrle Jobs Tracker ${new Date().toISOString().slice(0, 10)}.xlsx`, new Blob([buf]), 'Tracker exported.');
 }
+
+/* ---------- Google Sheet sync ----------
+   One-way: the app is the source of truth. Every saved or deleted job (sample excluded) goes into a
+   queue kept on the device; the queue is posted to a Google Apps Script web app (google-sheet/sync.gs)
+   that upserts one row per job, keyed by Job ID. Offline or failed sends stay queued and retry when
+   the connection returns, when the app reopens, and every minute after a failure. */
+const Sheet = (() => {
+  const dirty = new Map(), gone = new Map();  // job id → change counter, so edits made mid-send aren't dropped
+  let seq = 0, timer = null, busy = false, loaded = false, lastErr = null, lastOk = null;
+  const url = () => (S.settings.sheetUrl || '').trim();
+  const on = () => /^https:\/\/script\.google(usercontent)?\.com\//.test(url());
+  async function load() {
+    if (loaded) return; loaded = true;
+    try { const q = await Store.getKV('sheetQueue'); if (q) { (q.dirty || []).forEach(i => dirty.set(i, ++seq)); (q.gone || []).forEach(i => gone.set(i, ++seq)); lastOk = q.lastOk || null; } } catch (e) {}
+  }
+  const persist = () => Store.setKV('sheetQueue', { dirty: [...dirty.keys()], gone: [...gone.keys()], lastOk }).catch(() => {});
+  function schedule(ms) { clearTimeout(timer); timer = setTimeout(() => flush(), ms == null ? 4000 : ms); }
+  function mark(job) { if (!on() || !job || isSample(job)) return; gone.delete(job.id); dirty.set(job.id, ++seq); persist(); schedule(); }
+  function markGone(job) { if (!on() || !job || isSample(job)) return; dirty.delete(job.id); gone.set(job.id, ++seq); persist(); schedule(); }
+  const pad = n => String(n).padStart(2, '0');
+  const ymd = t => { if (!t) return ''; const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  const ymdhm = t => { const d = new Date(t || Date.now()); return `${ymd(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  function row(j) {
+    const r = { 'Job ID': j.id, 'Proposal #': j.proposalNo || '', Customer: j.customer.name, Address: j.customer.address || '', Phone: j.customer.phone || '',
+      Email: j.customer.email || '', Status: statusLabel(j.status), Created: ymd(j.createdAt), 'Date sent': ymd(j.sentAt),
+      'New customer': j.quote.newCustomer ? 'Yes' : 'No', 'Startup fee': 0, 'Last updated': ymdhm(j.updatedAt) };
+    j.options.forEach((o, i) => {
+      const q = computeQuote(viewOf(j, o), S.settings);
+      if (i === 0) r['Startup fee'] = q.deposit;
+      r[`Option ${i + 1}`] = o.name || `Option ${i + 1}`; r[`Option ${i + 1} price`] = Math.round(q.total * 100) / 100;
+    });
+    return r;
+  }
+  async function flush() {
+    await load();
+    if (!on() || busy || (!dirty.size && !gone.size)) return;
+    if (navigator.onLine === false) { lastErr = "the iPad is offline."; return; }
+    busy = true; clearTimeout(timer); const hadProblem = !!problem();
+    const sent = new Map([...dirty, ...gone]);
+    const rows = [...dirty.keys()].map(id => S.jobs.find(j => j.id === id)).filter(j => j && !isSample(j)).map(row);
+    const ctl = new AbortController(), kill = setTimeout(() => ctl.abort(), 30000);
+    let ok = false;
+    try {
+      // A plain-text body keeps this a "simple" request, so the browser skips the CORS preflight Apps Script can't answer.
+      const res = await fetch(url(), { method: 'POST', body: JSON.stringify({ app: 'wehrle-quote-builder', rows, deletes: [...gone.keys()] }), signal: ctl.signal });
+      let d = null; try { d = await res.json(); } catch (e) {}
+      if (!d) throw new Error(res.ok ? "the sheet's script didn't answer. Check that it's deployed with access set to Anyone." : `the sheet answered with error ${res.status}.`);
+      if (!d.ok) throw new Error(`the sheet's script reported: ${d.error || 'unknown error'}.`);
+      for (const [id, n] of sent) { if (dirty.get(id) === n) dirty.delete(id); if (gone.get(id) === n) gone.delete(id); }
+      lastErr = null; lastOk = Date.now(); ok = true;
+    } catch (e) {
+      lastErr = e.name === 'AbortError' ? 'the sheet took too long to answer.' : /^(Load failed|Failed to fetch|NetworkError)/.test(e.message) ? "couldn't reach Google. Check the connection and the link in Settings." : e.message;
+    } finally {
+      clearTimeout(kill); busy = false; persist();
+      if (S.view === 'jobs' && !S.newOpen && hadProblem !== !!problem()) renderJobs();
+      if (dirty.size || gone.size) schedule(ok ? 500 : 60000);
+      if (S.view === 'settings') paintStatus();
+    }
+    return ok;
+  }
+  async function syncAll() {
+    if (!on()) return toast('Paste the Web app link from Apps Script first. It starts with https://script.google.com/');
+    await load();
+    for (const j of S.jobs) if (!isSample(j)) dirty.set(j.id, ++seq);
+    if (!dirty.size && !gone.size) return toast('No jobs to sync yet. The sample job is left out.');
+    await persist();
+    const n = dirty.size; const ok = await flush();
+    toast(ok ? `Synced ${n} job${n === 1 ? '' : 's'} to the Google Sheet.` : `Sync didn't go through: ${lastErr}`);
+  }
+  function statusText() {
+    if (!url()) return 'Not connected.';
+    if (!on()) return "That doesn't look like an Apps Script Web app link. It should start with https://script.google.com/macros/s/";
+    const pending = dirty.size + gone.size;
+    if (lastErr) return `Behind by ${pending} job${pending === 1 ? '' : 's'}: ${lastErr}`;
+    if (pending) return `${pending} job${pending === 1 ? '' : 's'} waiting to sync.`;
+    return lastOk ? `Up to date. Last synced ${new Date(lastOk).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : 'Connected. Tap Sync all jobs now to fill the sheet.';
+  }
+  function paintStatus() { const el = $('#s-sync-status'); if (el) el.textContent = statusText(); }
+  const problem = () => (on() && lastErr && (dirty.size || gone.size)) ? lastErr : null;
+  async function start() { await load(); paintStatus(); if (dirty.size || gone.size) schedule(1500); }
+  window.addEventListener('online', () => schedule(500));
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedule(1500); });
+  return { mark, markGone, flush, syncAll, statusText, paintStatus, problem, start };
+})();
+// Every job save or delete anywhere in the app queues that job for the sheet.
+{ const save = Store.saveJob, del = Store.deleteJob;
+  Store.saveJob = j => save(j).then(r => { Sheet.mark(j); return r; });
+  Store.deleteJob = id => { const j = S.jobs.find(x => x.id === id); return del(id).then(r => { if (j) Sheet.markGone(j); return r; }); }; }
 
 /* ---------- backup ---------- */
 async function exportBackup() {
@@ -1321,6 +1410,12 @@ function renderSettings() {
       </div>`).join('')}
       <button class="btn small" id="btn-addfee">Add fee</button>
     </div>
+    <div class="card" style="grid-column:1/-1"><h2>Google Sheet sync</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 12px">Keeps one row per job in your Google Sheet, updated whenever a job is edited, shared or changes status. Change statuses here in the app; edits made in the sheet get overwritten.</p>
+      <label class="f" for="s-sheet">Apps Script Web app link<input type="url" id="s-sheet" data-s="sheetUrl" value="${esc(st.sheetUrl || '')}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <p class="muted" id="s-sync-status" style="font-size:13px;margin:10px 0 0" aria-live="polite">${esc(Sheet.statusText())}</p>
+      <div class="row" style="margin-top:10px"><button class="btn small" id="btn-sync-all">Sync all jobs now</button></div>
+    </div>
     <div class="card" style="grid-column:1/-1"><h2>Proposal terms</h2>
       <label class="f" for="s-terms">One term per line. Text before the first colon prints in bold. {startup} becomes the startup fee amount.</label>
       <textarea id="s-terms" style="margin-top:8px">${esc(st.terms.join('\n'))}</textarea>
@@ -1341,11 +1436,14 @@ $('#v-settings').addEventListener('input', e => {
   else if (t.id === 's-terms') st.terms = t.value.split('\n').map(s => s.trim()).filter(Boolean);
   else return;
   touchSettings();
+  if (t.id === 's-sheet') Sheet.paintStatus();
 });
+$('#v-settings').addEventListener('change', e => { if (e.target.id === 's-sheet' && S.settings.sheetUrl) { Store.setKV('settings', S.settings); Sheet.syncAll(); } });
 $('#v-settings').addEventListener('click', e => {
   const st = S.settings;
   if (e.target.id === 'btn-addfee') { st.fees.push({ id: uid(), name: '', kind: 'perFt', amount: 0, defaultOn: false }); touchSettings(); renderSettings(); }
   else if (e.target.dataset.rmfee !== undefined) { st.fees.splice(+e.target.dataset.rmfee, 1); touchSettings(); renderSettings(); }
+  else if (e.target.id === 'btn-sync-all') Sheet.syncAll();
   else if (e.target.id === 'btn-terms-reset') { st.terms = DEFAULT_TERMS.slice(); st.customerNote = DEFAULT_CUSTOMER_NOTE; touchSettings(); renderSettings(); toast('Default terms restored.'); }
 });
 
@@ -1385,5 +1483,6 @@ async function seedSample() {
   let seeded = false; try { seeded = !!(await Store.getKV('sampleSeeded')); } catch (e) {}
   if (!S.jobs.length && !seeded) { try { await seedSample(); await Store.setKV('sampleSeeded', true); } catch (e) { console.warn(e); } }
   show('jobs');
+  Sheet.start().then(() => { if (Sheet.problem()) renderJobs(); });
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
