@@ -99,6 +99,10 @@ input[type=range]{width:100%;accent-color:var(--gold);min-height:32px}
 .lines td:last-child{text-align:right;white-space:nowrap;padding-left:12px}
 .lines .d{display:block;font-size:12px;color:var(--muted)}
 .lines tr.total td{font:800 22px var(--serif);border-bottom:0;padding-top:14px}
+.lines.future th{font:600 12px var(--sans);color:var(--muted);text-align:right;padding:0 0 6px 12px;white-space:nowrap}
+.lines.future td{vertical-align:middle}
+.lines.future td.num{text-align:right;padding-left:12px;white-space:nowrap}
+.lines.future .money input{width:110px}
 .pill{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;background:#2A2617;color:var(--warm)}
 .wline{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
 .custom{display:grid;grid-template-columns:1fr 120px auto;gap:8px;margin-bottom:8px}
@@ -120,3 +124,5 @@ input[type=range]{width:100%;accent-color:var(--gold);min-height:32px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 .sharebar{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--raised);border:1px solid var(--gold);padding:10px 12px 10px 16px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.45);z-index:11;max-width:calc(100% - 32px)}
 .sharebar span{min-width:0;overflow-wrap:anywhere}
+.roofr-edges .check{min-height:40px}
+.roofr-edges .check .num{margin-left:auto;font-weight:400}

@@ -17,7 +17,7 @@ It is **not** customer-facing. Customers only ever see the PDF.
 - Installed on iPads with Safari's **Add to Home Screen** (`manifest.webmanifest`, `icons/`). `sw.js` makes it work offline: network first, cached fallback.
 - All data lives **on each device** in IndexedDB. There is no server or database yet. Devices don't sync; **Back up all jobs** and **Restore backup** on the Jobs tab move data between devices.
 - Photos are stored as JPEG **data URLs (strings), never Blobs**. iPad Safari failed to display Blobs read back from IndexedDB, so keep it this way.
-- Vendored, self-hosted dependencies so it works offline: `vendor/jspdf.umd.min.js` (2.5.1), `vendor/exceljs.min.js` (4.4.0, loaded only when exporting), and `fonts/` (Noto Sans 400/400i/600/700, Noto Serif 800).
+- Vendored, self-hosted dependencies so it works offline: `vendor/jspdf.umd.min.js` (2.5.1), `vendor/exceljs.min.js` (4.4.0, loaded only when exporting), `vendor/pdf.min.js` + `vendor/pdf.worker.min.js` (PDF.js 3.11.174 legacy build, loaded only when reading a Roofr report), and `fonts/` (Noto Sans 400/400i/600/700, Noto Serif 800).
 - Saving files: on touch devices, `offerFile()` opens the iOS share sheet (`navigator.share`). Elsewhere it triggers a normal download. iOS only allows the share sheet right after a tap, so if file prep is slow a "Ready to share" bar appears and the next tap shares it. Proposal PDF/PNG blobs are pre-built after the proposal renders for the same reason.
 
 ## Code map (`app.js`, top to bottom)
@@ -33,6 +33,7 @@ It is **not** customer-facing. Customers only ever see the PDF.
 | trace editor | canvas, pointer/pinch gestures, tools, undo history, options panel |
 | photos | resize to max 2000px, data URLs, sample-house fallback |
 | views | jobs list, quote, proposal, settings |
+| Roofr report | `pdfText()` (PDF.js text by line), `parseRoofr()` (edge lengths, pitch, area, address), `renderRoofrCard()` on the Quote tab |
 | Excel tracker | `exportTracker()`: one row per job (sample excluded), option names/prices side by side, Status dropdown |
 | Google Sheet sync | `Sheet` module: queue, `flush()`, `syncAll()`; wraps `Store.saveJob`/`deleteJob` |
 | proposal | canvas-drawn letter pages at 1700×2200 → jsPDF |
@@ -43,10 +44,12 @@ It is **not** customer-facing. Customers only ever see the PDF.
 job: { id, customer{name,address,phone,email}, status, photoId, photoW, photoH,
        scale{a,b,feet}, spacing (12|15), color ('warm'|'multi'),
        windows: [shape],                     // shared by all options
-       options: [{ id, name, shapes: [shape], siteC9, siteGarland, custom: [{desc,amount}] }],
+       options: [{ id, name, shapes: [shape], siteC9, siteGarland, custom: [{desc,amount,future}],
+                  future: { c9, garland, wreaths, 'fee:<id>': amount } }],   // write-in future-season prices
        activeOpt, renderings{ '<optId>:<warm|multi>': photoId },
        quote{ newCustomer, rate, buffer, fees{}, wreathMarkup, garlandMarkup,
               garlandCost, garlandLen, mockups ('both'|'warm'|'multi'), snapshot },
+       roofr: null | { file, at, address, pitch, area, measures{eaves,rakes,ridges,hips,valleys,…: feet}, pick{edge: bool} },
        proposalNo, status, sentAt }
 status: 'draft'|'sent'|'approved'|'scheduled'|'completed'|'declined'  (older values are migrated in normalizeJob)
 shape: { id, type: 'c9'|'garland'|'wreath'|'window', points:[{x,y}] (photo pixels), size, cost, lit }
@@ -63,8 +66,16 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 - **Wreaths:** item cost × markup (default 2×). **Garland:** whole strands × strand cost × markup (default 2×). The markups are separate and editable in Settings and per job. Both are part of the install, not the startup fee.
 - **Extra fees:** a list in Settings (per-foot or flat), each a switch on the quote. There is **no 2-story surcharge** (the owners decided against it).
 - **No minimum job charge.**
+- **Future seasons:** each line repeats at this season's price unless the owners write in a future-season price for that line (Quote tab, "Future seasons" card, per option). Typical use: wreaths and garland drop the materials cost after year one. The startup fee never repeats. `computeQuote` returns `futureTotal`.
 - Saving a proposal **locks the rates** for that job (`quote.snapshot`), so later Settings changes don't alter a sent quote.
 - **Proposal numbers** come from Settings (`nextProposalNo`, starting at 31), are assigned once per job, and increment by one.
+
+## Roofr reports
+
+- For jobs that can't be measured in person or have a lot of roofline, the owners upload a **Roofr** roof report PDF on the Quote tab. The app reads the edge lengths (eaves, rakes, ridges, hips, valleys, flashing…), pitch, roof area and address. Only those numbers are saved on the job, never the PDF.
+- Roofr totals cover the **whole roof**, so the owners tick the edges they're lighting (eaves + rakes by default). **Use N ft for C9 lights** puts that footage into the current option's Measured on site C9 box, priced with **no buffer**, and they can trim it there.
+- A warning shows if the report's house number doesn't match the job address. Unreadable files show a message and change nothing.
+- `samples/` (git-ignored) is for local test reports, since they contain customer addresses.
 
 ## Job tracking & Excel export
 
@@ -84,7 +95,7 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 ## Proposal layout (owner-approved wording)
 
 - **Option pages:** page 1 has the full header (logo, date, proposal number, "Prepared for"). Later option pages use a compact header. Each page shows the mockups (warm white and/or multicolor, or an uploaded AI rendering), the line items, then this line: *"Includes lighting lease, professional installation, timer setup, in-season light maintenance, takedown and storage."*
-- **Totals:** **Total for current season**, then italic **Total for future seasons** (the total minus the startup fee).
+- **Totals:** **Total for current season**, then italic **Total for future seasons** (`futureTotal`: the written-in future prices, or each line's current price when blank; never the startup fee).
 - **Green box:** "Due at signing: $349 startup fee to secure your install date." / "The remaining balance is due once installation is complete."
 - **Last page:** the terms (from Settings), a Customer Responsibilities paragraph, then acceptance. With several options it has a checkbox per option and its total.
 

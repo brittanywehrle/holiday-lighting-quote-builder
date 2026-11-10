@@ -3,7 +3,7 @@
 const CACHE = 'wehrle-quotes-v1';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
-  'vendor/jspdf.umd.min.js', 'vendor/exceljs.min.js', 'assets/sample-house.jpg', 'assets/logo.png',
+  'vendor/jspdf.umd.min.js', 'vendor/exceljs.min.js', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'assets/sample-house.jpg', 'assets/logo.png',
   'fonts/noto-sans-latin-400-normal.woff2', 'fonts/noto-sans-latin-400-italic.woff2',
   'fonts/noto-sans-latin-600-normal.woff2', 'fonts/noto-sans-latin-700-normal.woff2',
   'fonts/noto-serif-latin-800-normal.woff2',

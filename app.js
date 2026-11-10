@@ -109,7 +109,7 @@ const PAYMENT_LABEL = { unpaid: 'Not paid', deposit: 'Deposit received', paid: '
 const dateLabel = d => { if (!d) return ''; const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 
 /* ---------- options: each job has 1+ options; lit windows are shared by all of them ---------- */
-function blankOption() { return { id: uid(), name: '', shapes: [], siteC9: null, siteGarland: null, custom: [] }; }
+function blankOption() { return { id: uid(), name: '', shapes: [], siteC9: null, siteGarland: null, custom: [], future: {} }; }
 function normalizeJob(job) {
   if (!job) return job;
   const q = job.quote || (job.quote = {});
@@ -125,13 +125,14 @@ function normalizeJob(job) {
   if (!Array.isArray(job.windows)) job.windows = [];
   if (!PAYMENTS.includes(job.payment)) job.payment = 'unpaid';
   if (typeof job.installDate !== 'string') job.installDate = '';
-  job.options.forEach(o => { if (!Array.isArray(o.shapes)) o.shapes = []; if (!Array.isArray(o.custom)) o.custom = []; if (o.name == null) o.name = ''; });
+  if (job.roofr === undefined) job.roofr = null;
+  job.options.forEach(o => { if (!Array.isArray(o.shapes)) o.shapes = []; if (!Array.isArray(o.custom)) o.custom = []; if (o.name == null) o.name = ''; if (!o.future || typeof o.future !== 'object') o.future = {}; });
   if (!job.options.some(o => o.id === job.activeOpt)) job.activeOpt = job.options[0].id;
   return job;
 }
 const cur = (job = S.job) => job.options.find(o => o.id === job.activeOpt) || job.options[0];
 const allShapes = (job, opt) => [...job.windows, ...(opt || cur(job)).shapes];
-function viewOf(job, opt) { opt = opt || cur(job); return { ...job, shapes: allShapes(job, opt), quote: { ...job.quote, siteC9: opt.siteC9, siteGarland: opt.siteGarland, custom: opt.custom } }; }
+function viewOf(job, opt) { opt = opt || cur(job); return { ...job, shapes: allShapes(job, opt), quote: { ...job.quote, siteC9: opt.siteC9, siteGarland: opt.siteGarland, custom: opt.custom, future: opt.future || {} } }; }
 const optTitle = (job, o) => `Option ${job.options.indexOf(o) + 1}${o.name ? ' · ' + o.name : ''}`;
 function addShape(s) { (s.type === 'window' ? S.job.windows : cur().shapes).push(s); }
 function optTabsHTML(job) {
@@ -176,20 +177,30 @@ function computeQuote(job, st) {
   const gLen = Math.max(1, num(q.garlandLen, 9)), gCost = num(q.garlandCost, 0);
   const strands = gFt ? Math.ceil(gFt / gLen) : 0;
   const rows = [];
-  if (c9Ft) rows.push({ label: 'C9 roofline lighting', detail: `${c9Ft} ft × ${money(rate)}/ft · install, takedown & storage`, amount: c9Ft * rate });
-  if (strands) rows.push({ label: 'Garland', detail: `${gFt} ft · ${strands} strand${strands > 1 ? 's' : ''}, installed`, amount: strands * gCost * gMk, internal: { cost: strands * gCost } });
+  if (c9Ft) rows.push({ key: 'c9', label: 'C9 roofline lighting', detail: `${c9Ft} ft × ${money(rate)}/ft · install, takedown & storage`, amount: c9Ft * rate });
+  if (strands) rows.push({ key: 'garland', label: 'Garland', detail: `${gFt} ft · ${strands} strand${strands > 1 ? 's' : ''}, installed`, amount: strands * gCost * gMk, internal: { cost: strands * gCost } });
   const wreaths = m.wreaths.map((w, i) => ({ id: w.id, n: i + 1, size: w.size, cost: num(w.cost), price: num(w.cost) * wMk }));
-  if (wreaths.length) rows.push({ label: wreaths.length > 1 ? `Wreaths (${wreaths.length})` : 'Wreath', detail: wreaths.map(w => `${w.size}″`).join(', ') + ', installed', amount: wreaths.reduce((s, w) => s + w.price, 0) });
+  if (wreaths.length) rows.push({ key: 'wreaths', label: wreaths.length > 1 ? `Wreaths (${wreaths.length})` : 'Wreath', detail: wreaths.map(w => `${w.size}″`).join(', ') + ', installed', amount: wreaths.reduce((s, w) => s + w.price, 0) });
   for (const f of rates.fees) {
     const on = q.fees[f.id] !== undefined ? q.fees[f.id] : !!f.defaultOn;
     if (!on) continue;
-    if (f.kind === 'perFt') { if (c9Ft) rows.push({ label: f.name || 'Fee', detail: `${c9Ft} ft × ${money(num(f.amount))}/ft`, amount: c9Ft * num(f.amount) }); }
-    else rows.push({ label: f.name || 'Fee', detail: '', amount: num(f.amount) });
+    if (f.kind === 'perFt') { if (c9Ft) rows.push({ key: 'fee:' + f.id, label: f.name || 'Fee', detail: `${c9Ft} ft × ${money(num(f.amount))}/ft`, amount: c9Ft * num(f.amount) }); }
+    else rows.push({ key: 'fee:' + f.id, label: f.name || 'Fee', detail: '', amount: num(f.amount) });
   }
-  for (const c of q.custom) if (c.desc || num(c.amount)) rows.push({ label: c.desc || 'Custom item', detail: '', amount: num(c.amount) });
-  if (q.newCustomer) rows.push({ label: 'New customer startup', detail: 'Admin and materials cut to fit your home', amount: rates.startup });
+  q.custom.forEach((c, i) => { if (c.desc || num(c.amount)) rows.push({ key: 'custom:' + i, label: c.desc || 'Custom item', detail: '', amount: num(c.amount), fut: c.future }); });
+  if (q.newCustomer) rows.push({ key: 'startup', label: 'New customer startup', detail: 'Admin and materials cut to fit your home', amount: rates.startup });
   const total = rows.reduce((s, r) => s + r.amount, 0);
-  return { m, rows, total, deposit: q.newCustomer ? rates.startup : 0, buf, bufBase, c9Raw, gRaw, siteC9, siteG, rate, wMk, gMk, c9Ft, gFt, strands, gLen, gCost, wreaths, rates,
+  // Future seasons: each line repeats at this season's price unless a future price is written in.
+  // The startup fee is a one-time charge, so it never repeats.
+  const fut = q.future || {}, set = v => v != null && v !== '';
+  for (const r of rows) {
+    const v = r.key.startsWith('custom:') ? r.fut : fut[r.key];
+    delete r.fut;
+    r.futureSet = r.key !== 'startup' && set(v);
+    r.future = r.key === 'startup' ? 0 : r.futureSet ? num(v) : r.amount;
+  }
+  const futureTotal = rows.reduce((s, r) => s + r.future, 0);
+  return { m, rows, total, futureTotal, deposit: q.newCustomer ? rates.startup : 0, buf, bufBase, c9Raw, gRaw, siteC9, siteG, rate, wMk, gMk, c9Ft, gFt, strands, gLen, gCost, wreaths, rates,
     bulbs: c9Ft ? Math.ceil((siteC9 != null ? siteC9 : m.c9) * 12 / job.spacing) : 0 };
 }
 
@@ -1005,6 +1016,95 @@ $('#sharebar-go').addEventListener('click', async () => {
 });
 $('#sharebar-x').addEventListener('click', hideShareBar);
 
+/* ---------- Roofr report ----------
+   Reads the edge lengths out of a Roofr roof report PDF (PDF.js, loaded only when needed).
+   Roofr measures the whole roof, so the owners tick the edges they light and send that
+   footage to Measured on site. Only the numbers are kept, not the PDF. */
+const ROOFR_EDGES = [['eaves', 'Eaves'], ['rakes', 'Rakes'], ['ridges', 'Ridges'], ['hips', 'Hips'], ['valleys', 'Valleys'],
+  ['wallFlashing', 'Wall flashing'], ['stepFlashing', 'Step flashing'], ['curbFlashing', 'Curb flashing'],
+  ['transitions', 'Transitions'], ['parapet', 'Parapet wall'], ['unspecified', 'Unspecified']];
+async function pdfText(file) {
+  if (!window.pdfjsLib) await loadScriptOnce('vendor/pdf.min.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const pages = [];
+  try {
+    for (let i = 1; i <= doc.numPages; i++) {
+      const tc = await (await doc.getPage(i)).getTextContent();
+      // Rebuild lines: a new line starts at an explicit line end or when the baseline moves.
+      // Separate pieces of text on the same baseline get a space between them.
+      const lines = []; let line = '', lastY = null, lastEnd = null;
+      for (const it of tc.items) {
+        const x = it.transform[4], y = it.transform[5];
+        if (lastY != null && Math.abs(y - lastY) > 2) { lines.push(line); line = ''; lastEnd = null; }
+        if (line && lastEnd != null && x > lastEnd + 1 && !/\s$/.test(line)) line += ' ';
+        line += it.str; lastY = y; lastEnd = x + (it.width || 0);
+        if (it.hasEOL) { lines.push(line); line = ''; lastY = null; lastEnd = null; }
+      }
+      lines.push(line);
+      pages.push(lines.map(l => l.trim()).filter(Boolean).join('\n'));
+    }
+  } finally { doc.destroy(); }
+  return pages.join('\n');
+}
+function parseRoofr(text) {
+  const measures = {};
+  for (const [k, label] of ROOFR_EDGES) {
+    // "Eaves: 218ft 0in" on the length page, or "Total eaves" / "218ft 0in" on the summary page.
+    const re = new RegExp(`(?:^|\\n)\\s*(?:Total\\s+)?${label.replace(' ', '\\s+')}\\s*:?\\s*\\n?\\s*(\\d+)\\s*ft\\s*(\\d+)\\s*in`, 'i');
+    const x = text.match(re);
+    if (x) measures[k] = Math.round((num(x[1]) + num(x[2]) / 12) * 100) / 100;
+  }
+  const pitch = (text.match(/Predominant pitch:?\s*(\d{1,2}\/12)/i) || [])[1] || '';
+  const area = num(((text.match(/Total roof area:?\s*([\d,]+)\s*sqft/i) || [])[1] || '').replace(/,/g, ''), 0);
+  // The address repeats on its own line under each page title; take the shortest line that looks like one.
+  const address = (text.match(/^.*,\s*[A-Z]{2}\s+\d{5}.*$/gm) || []).map(l => l.trim()).sort((a, b) => a.length - b.length)[0] || '';
+  return { measures, pitch, area, address };
+}
+const ftIn = ft => { const f = Math.floor(ft + 1e-9), i = Math.round((ft - f) * 12); return i === 12 ? `${f + 1} ft` : i ? `${f} ft ${i} in` : `${f} ft`; };
+async function importRoofr(file) {
+  const job = S.job; S.roofrBusy = true; renderRoofrCard();
+  try {
+    const r = parseRoofr(await pdfText(file));
+    if (!Object.values(r.measures).some(v => v > 0)) { toast("Couldn't find Roofr measurements in that PDF. Type the footage into Measured on site instead."); return; }
+    job.roofr = { file: file.name, at: Date.now(), ...r, pick: { eaves: true, rakes: true } };
+    touchJob(); toast('Roofr report read. Tick the edges you\'re lighting.');
+  } catch (e) {
+    console.error(e); toast("Couldn't open that PDF. Type the footage into Measured on site instead.");
+  } finally { S.roofrBusy = false; if (S.job === job && S.view === 'quote') renderRoofrCard(); }
+}
+function roofrPicked(rf) { return ROOFR_EDGES.reduce((s, [k]) => s + (rf.pick[k] && rf.measures[k] ? rf.measures[k] : 0), 0); }
+function renderRoofrCard() {
+  const el = $('#q-roofr'); if (!el) return;
+  const job = S.job, rf = job.roofr, o = cur(job), multi = job.options.length > 1, scope = multi ? ` · Option ${job.options.indexOf(o) + 1}` : '';
+  const upload = label => `<label class="btn small" for="roofr-file">${label}</label><input type="file" id="roofr-file" accept="application/pdf,.pdf" hidden>`;
+  if (S.roofrBusy) { el.innerHTML = `<h2>Roofr report</h2><p class="muted" style="margin:0">Reading the report…</p>`; return; }
+  if (!rf) {
+    el.innerHTML = `<h2>Roofr report</h2><p class="muted" style="font-size:13px;margin:0 0 10px">Can't measure in person, or lots of rooflines? Upload a Roofr report and pick the edges you're lighting to fill in the C9 footage.</p><div class="row">${upload('Upload Roofr report')}</div>`;
+    return;
+  }
+  const house = s => (String(s).match(/^\s*(\d+)/) || [])[1];
+  const mismatch = rf.address && job.customer.address && house(rf.address) && house(job.customer.address) && house(rf.address) !== house(job.customer.address);
+  const total = roofrPicked(rf), ft = Math.ceil(total - 1e-9);
+  const edges = ROOFR_EDGES.filter(([k]) => rf.measures[k] > 0);
+  el.innerHTML = `<h2>Roofr report</h2>
+    <p style="margin:0 0 4px;font-weight:600">${esc(rf.address || rf.file)}</p>
+    <p class="muted" style="font-size:13px;margin:0 0 10px">${[rf.pitch && `Pitch ${esc(rf.pitch)}`, rf.area && `${rf.area.toLocaleString()} sq ft roof`, `Read ${new Date(rf.at).toLocaleDateString()}`].filter(Boolean).join(' · ')}</p>
+    ${mismatch ? `<div class="warnbox" style="margin-bottom:10px">This report is for ${esc(rf.address)}, but the job is at ${esc(job.customer.address)}.</div>` : ''}
+    <p class="muted" style="font-size:13px;margin:0 0 4px">These are whole-roof totals. Tick the edges you're lighting, then trim the C9 number in Measured on site if you're only doing part of an edge.</p>
+    <div class="roofr-edges">${edges.map(([k, label]) => `<label class="check" for="rf-${k}"><input type="checkbox" id="rf-${k}" data-roofr-pick="${k}" ${rf.pick[k] ? 'checked' : ''}><span>${label}</span><span class="num muted">${ftIn(rf.measures[k])}</span></label>`).join('')}</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary small" data-roofr-use="1" ${ft ? '' : 'disabled'}>Use ${ft} ft for C9 lights${scope}</button>
+      ${upload('Replace report')}
+      <button class="btn small" data-roofr-remove="1">Remove</button>
+    </div>`;
+}
+$('#v-quote').addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'roofr-file') { const f = t.files[0]; t.value = ''; if (f) importRoofr(f); }
+  else if (t.dataset.roofrPick) { S.job.roofr.pick[t.dataset.roofrPick] = t.checked; touchJob(); renderRoofrCard(); }
+});
+
 /* ---------- quote view ---------- */
 function renderQuote() {
   const job = S.job, q = job.quote, o = cur(job), multi = job.options.length > 1, r = computeQuote(viewOf(job, o), S.settings);
@@ -1030,6 +1130,7 @@ function renderQuote() {
       <label class="f" for="q-site-g">Garland (ft)<input type="number" inputmode="decimal" step="1" min="0" id="q-site-g" data-o="siteGarland" value="${o.siteGarland ?? ''}" placeholder="Photo: ${r.m.scaled ? Math.ceil(r.m.garland * (1 + r.buf / 100)) : 0}"></label>
     </div>
   </div>
+  <div class="card" id="q-roofr"></div>
   <div class="card"><h2>Wreaths${scope}</h2>
     ${r.wreaths.length ? r.wreaths.map(w => `<div class="wline"><span>Wreath ${w.n} · ${w.size}″</span><span class="money"><span>$</span><input type="number" inputmode="decimal" step="0.01" aria-label="Wreath ${w.n} cost" data-wreath="${w.id}" value="${w.cost || ''}"></span><span class="num" data-wprice="${w.id}">${money(w.price)}</span></div>`).join('') : `<p class="muted" style="margin:0">No wreaths placed. Add them with the Wreath tool on Trace.</p>`}
     <label class="f" for="q-wmk" style="margin-top:12px">Wreath markup for this job (default ${r.rates.wreathMarkup}×)</label>
@@ -1048,10 +1149,11 @@ function renderQuote() {
     <button class="btn small" id="btn-addcustom">Add custom item</button>
   </div>
   <div class="card" id="q-summary"></div>
+  <div class="card" id="q-future"></div>
   <div class="card" id="q-pull"></div>
   </div>
   <div class="row" style="margin-top:16px"><button class="btn primary" data-go="proposal">Build proposal</button><button class="btn" data-go="trace">Back to tracing</button></div>`;
-  $('#v-quote').innerHTML = h; updateQuoteTotals();
+  $('#v-quote').innerHTML = h; updateQuoteTotals(); renderRoofrCard();
 }
 function updateQuoteTotals() {
   const job = S.job, o = cur(job), multi = job.options.length > 1, r = computeQuote(viewOf(job, o), S.settings);
@@ -1064,7 +1166,8 @@ function updateQuoteTotals() {
   }).join('')}</tbody></table>`;
   $('#q-gline').textContent = `${r.siteG != null ? r.gFt + ' ft measured on site' : r.gRaw + ' ft from photo · ' + r.gFt + ' ft bid'} · ${r.strands} strand${r.strands === 1 ? '' : 's'}`;
   $('#q-summary').innerHTML = `<h2>Customer sees${scope}</h2><table class="lines"><tbody>${r.rows.map(x => `<tr><td>${esc(x.label)}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ''}</td><td>${money(x.amount)}</td></tr>`).join('') || '<tr><td class="muted">Nothing priced yet</td><td></td></tr>'}
-    <tr class="total"><td>Total</td><td>${money(r.total)}</td></tr></tbody></table>
+    <tr class="total"><td>Total</td><td>${money(r.total)}</td></tr>
+    <tr><td><i>Total for future seasons</i></td><td><i>${money(r.futureTotal)}</i></td></tr></tbody></table>
     <p style="margin:6px 0 0" class="muted">${r.deposit ? `Due at signing: <b style="color:var(--fg)">${money(r.deposit)}</b> startup fee` : 'No deposit due (returning customer)'}</p>`;
   const wCost = r.wreaths.reduce((s, w) => s + w.cost, 0), wPrice = r.wreaths.reduce((s, w) => s + w.price, 0);
   const gCost = r.strands * r.gCost, gPrice = gCost * r.gMk;
@@ -1077,6 +1180,27 @@ function updateQuoteTotals() {
     <tr><td>Garland cost → price</td><td class="num">${money(gCost)} → ${money(gPrice)} · margin ${money(gPrice - gCost)}</td></tr>
   </tbody></table>`;
   r.wreaths.forEach(w => { const el = document.querySelector(`[data-wprice="${w.id}"]`); if (el) el.textContent = money(w.price); });
+  renderFutureCard(r, scope);
+}
+// Future-season price per line. Rebuilt only when the set of lines changes, so typing in a box keeps focus.
+function renderFutureCard(r, scope) {
+  const el = $('#q-future'); if (!el) return;
+  const rows = r.rows.filter(x => x.key !== 'startup'), keys = rows.map(x => x.key).join('|');
+  if (el.dataset.keys !== keys || el.dataset.scope !== scope) {
+    el.dataset.keys = keys; el.dataset.scope = scope;
+    el.innerHTML = `<h2>Future seasons${scope}</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 8px">Write in what each line costs in later seasons, like wreaths and garland without the materials. Leave a box blank to charge the same as this season.${r.deposit ? ' The startup fee is one-time and never repeats.' : ''}</p>
+      ${rows.length ? `<table class="lines future"><thead><tr><th></th><th>This season</th><th>Future seasons</th></tr></thead><tbody>${rows.map(x => `<tr><td data-flabel="${x.key}"></td><td class="num" data-fnow="${x.key}"></td>
+        <td><span class="money"><span>$</span><input type="number" inputmode="decimal" step="0.01" min="0" aria-label="${esc(x.label)} future-season price" data-future="${x.key}" value="${x.futureSet ? x.future : ''}"></span></td></tr>`).join('')}
+        <tr class="total"><td>Total</td><td class="num" id="q-fnow"></td><td class="num" id="q-ftot"></td></tr></tbody></table>` : `<p class="muted" style="margin:0">Nothing priced yet.</p>`}`;
+  }
+  for (const x of rows) {
+    const lab = el.querySelector(`[data-flabel="${x.key}"]`); if (lab) lab.textContent = x.label;
+    const now = el.querySelector(`[data-fnow="${x.key}"]`); if (now) now.textContent = money(x.amount);
+    const inp = el.querySelector(`[data-future="${x.key}"]`); if (inp) inp.placeholder = x.amount.toFixed(2);
+  }
+  if ($('#q-fnow')) $('#q-fnow').textContent = money(r.total - r.deposit);
+  if ($('#q-ftot')) $('#q-ftot').textContent = money(r.futureTotal);
 }
 $('#v-quote').addEventListener('input', e => {
   const t = e.target, q = S.job.quote, o = cur();
@@ -1090,6 +1214,11 @@ $('#v-quote').addEventListener('input', e => {
   else if (t.dataset.fee) q.fees[t.dataset.fee] = t.checked;
   else if (t.dataset.wreath) { const w = o.shapes.find(s => s.id === t.dataset.wreath); if (w) { w.cost = num(t.value); S.settings.wreathCost = w.cost; touchSettings(); } }
   else if (t.dataset.custom !== undefined) { const c = o.custom[+t.dataset.custom]; c[t.dataset.field] = t.dataset.field === 'amount' ? (t.value === '' ? '' : num(t.value)) : t.value; }
+  else if (t.dataset.future) {
+    const k = t.dataset.future, v = t.value === '' ? null : num(t.value);
+    if (k.startsWith('custom:')) { const c = o.custom[+k.slice(7)]; if (c) c.future = v; }
+    else if (v == null) delete o.future[k]; else o.future[k] = v;
+  }
   else return;
   touchJob(); updateQuoteTotals();
 });
@@ -1098,6 +1227,11 @@ $('#v-quote').addEventListener('click', e => {
   if (ob) return switchOpt(ob.dataset.opt);
   if (t.id === 'btn-addcustom') { o.custom.push({ desc: '', amount: '' }); touchJob(); renderQuote(); }
   else if (t.dataset.rmcustom !== undefined) { o.custom.splice(+t.dataset.rmcustom, 1); touchJob(); renderQuote(); }
+  else if (t.dataset.roofrUse) {
+    const ft = Math.ceil(roofrPicked(S.job.roofr) - 1e-9); o.siteC9 = ft; touchJob(); renderQuote();
+    toast(`${ft} ft from the Roofr report is now the on-site C9 footage. No buffer is added.`);
+  }
+  else if (t.dataset.roofrRemove) { S.job.roofr = null; touchJob(); renderRoofrCard(); toast('Roofr report removed. Measured on site footage was kept.'); }
   else if (t.id === 'btn-unlock') { q.snapshot = null; touchJob(); renderQuote(); toast('Using current rates from Settings.'); }
   else if (t.dataset.go) show(t.dataset.go);
 });
@@ -1208,7 +1342,7 @@ async function buildOptionPage(job, opt, idx, shortId, date) {
   const mode = job.quote.mockups || 'both', AR = job.photoH / job.photoW, FW = PW - 2 * M;
   const bottom = PH - 190;
   const rowsH = 70 + r.rows.reduce((s, row) => s + (row.detail ? 104 : 72), 0);
-  const future = r.total - (r.deposit || 0);
+  const future = r.futureTotal;
   const incH = 66, totH = 128, dueH = 132 + (st.paymentLink && r.deposit ? 56 : 0), labH = 62;
   const capH = S.img ? (mode === 'both' ? Math.min(((FW - 40) / 2) * AR, 640) : Math.min(FW * AR, 980)) : 0;
   const fixedH = rowsH + incH + totH + dueH + (S.img ? labH : 0);
