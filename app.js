@@ -101,6 +101,13 @@ function newJob(customer) {
   });
 }
 
+/* ---------- job tracking values ---------- */
+const STATUSES = ['draft', 'sent', 'approved', 'scheduled', 'completed', 'declined'];
+const statusLabel = s => s ? s[0].toUpperCase() + s.slice(1) : '';
+const PAYMENTS = ['unpaid', 'deposit', 'paid'];
+const PAYMENT_LABEL = { unpaid: 'Not paid', deposit: 'Deposit received', paid: 'Fully paid' };
+const dateLabel = d => { if (!d) return ''; const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+
 /* ---------- options: each job has 1+ options; lit windows are shared by all of them ---------- */
 function blankOption() { return { id: uid(), name: '', shapes: [], siteC9: null, siteGarland: null, custom: [] }; }
 function normalizeJob(job) {
@@ -116,6 +123,8 @@ function normalizeJob(job) {
   job.status = ({ accepted: 'approved', installed: 'completed', removed: 'completed' })[job.status] || job.status || 'draft';
   if (!job.sentAt && q.snapshot && q.snapshot.at) job.sentAt = q.snapshot.at;
   if (!Array.isArray(job.windows)) job.windows = [];
+  if (!PAYMENTS.includes(job.payment)) job.payment = 'unpaid';
+  if (typeof job.installDate !== 'string') job.installDate = '';
   job.options.forEach(o => { if (!Array.isArray(o.shapes)) o.shapes = []; if (!Array.isArray(o.custom)) o.custom = []; if (o.name == null) o.name = ''; });
   if (!job.options.some(o => o.id === job.activeOpt)) job.activeOpt = job.options[0].id;
   return job;
@@ -715,8 +724,6 @@ async function openJob(id) {
 }
 
 /* ---------- jobs view ---------- */
-const STATUSES = ['draft', 'sent', 'approved', 'scheduled', 'completed', 'declined'];
-const statusLabel = s => s ? s[0].toUpperCase() + s.slice(1) : '';
 async function renderJobs() {
   const el = $('#v-jobs'); const jobs = S.jobs.slice().sort((a, b) => b.updatedAt - a.updatedAt);
   let h = `<div class="row" style="justify-content:space-between"><h1>Jobs</h1><div class="row">
@@ -749,6 +756,10 @@ async function renderJobs() {
         <div class="meta">${esc(j.customer.address || 'No address')}</div>
         <div class="row" style="justify-content:space-between"><span class="total">${priceTxt}</span><span class="muted num" style="font-size:13px">${all.length > 1 ? '' : q.c9Ft ? q.c9Ft + ' ft C9' : 'Not measured'}</span></div>
         <label class="f" for="st-${j.id}">Status<select id="st-${j.id}" data-status="${j.id}">${STATUSES.map(s => `<option value="${s}" ${s === j.status ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}</select></label>
+        <div class="jobtrack">
+          <label class="f" for="in-${j.id}">Install date<input type="date" id="in-${j.id}" data-install="${j.id}" value="${esc(j.installDate || '')}"></label>
+          <label class="f" for="pay-${j.id}">Payment<select id="pay-${j.id}" data-payment="${j.id}">${PAYMENTS.map(p => `<option value="${p}" ${p === j.payment ? 'selected' : ''}>${PAYMENT_LABEL[p]}</option>`).join('')}</select></label>
+        </div>
         <div class="row" style="margin-top:auto">
           <button class="btn primary small" data-open="${j.id}">Open</button>
           ${del ? `<button class="btn danger small" data-del-yes="${j.id}">Delete for good</button><button class="btn small" data-del-no="1">Keep</button>` : `<button class="btn small" data-del="${j.id}">Delete</button>`}
@@ -775,6 +786,13 @@ $('#v-jobs').addEventListener('click', async e => {
 });
 $('#v-jobs').addEventListener('change', async e => {
   if (e.target.dataset.status) { const j = S.jobs.find(x => x.id === e.target.dataset.status); j.status = e.target.value; j.updatedAt = Date.now(); await Store.saveJob(j); renderJobs(); }
+  if (e.target.dataset.install) {
+    // Picking an install date on an open job moves it to Scheduled.
+    const j = S.jobs.find(x => x.id === e.target.dataset.install); j.installDate = e.target.value || '';
+    if (j.installDate && ['draft', 'sent', 'approved'].includes(j.status)) { j.status = 'scheduled'; toast(`Scheduled for ${dateLabel(j.installDate)}.`); }
+    j.updatedAt = Date.now(); await Store.saveJob(j); renderJobs();
+  }
+  if (e.target.dataset.payment) { const j = S.jobs.find(x => x.id === e.target.dataset.payment); j.payment = e.target.value; j.updatedAt = Date.now(); await Store.saveJob(j); }
   if (e.target.id === 'import-file') { const f = e.target.files[0]; e.target.value = ''; if (f) importBackup(f); }
 });
 $('#v-jobs').addEventListener('submit', async e => {
@@ -811,6 +829,7 @@ async function exportTracker() {
     { header: 'Proposal #', key: 'no', width: 11 }, { header: 'Customer', key: 'name', width: 26 },
     { header: 'Address', key: 'address', width: 34 }, { header: 'Phone', key: 'phone', width: 15 },
     { header: 'Email', key: 'email', width: 28 }, { header: 'Status', key: 'status', width: 13 },
+    { header: 'Install date', key: 'install', width: 13 }, { header: 'Payment', key: 'pay', width: 17 },
     { header: 'Created', key: 'created', width: 12 }, { header: 'Date sent', key: 'sent', width: 12 },
     { header: 'New customer', key: 'newc', width: 13 }, { header: 'Startup fee', key: 'startup', width: 12 }
   ];
@@ -819,7 +838,8 @@ async function exportTracker() {
   const day = t => { if (!t) return null; const d = new Date(t); return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); };
   for (const j of jobs) {
     const row = { no: j.proposalNo || null, name: j.customer.name, address: j.customer.address || '', phone: j.customer.phone || '', email: j.customer.email || '',
-      status: statusLabel(j.status), created: day(j.createdAt), sent: day(j.sentAt), newc: j.quote.newCustomer ? 'Yes' : 'No', startup: 0 };
+      status: statusLabel(j.status), install: j.installDate ? (([y, m, d]) => new Date(Date.UTC(y, m - 1, d)))(j.installDate.split('-').map(Number)) : null, pay: PAYMENT_LABEL[j.payment],
+      created: day(j.createdAt), sent: day(j.sentAt), newc: j.quote.newCustomer ? 'Yes' : 'No', startup: 0 };
     j.options.forEach((o, i) => {
       const r = computeQuote(viewOf(j, o), S.settings);
       if (i === 0) row.startup = r.deposit;
@@ -831,7 +851,7 @@ async function exportTracker() {
   head.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B5E3B' } }; c.alignment = { vertical: 'middle' }; });
   ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
   const money$ = '"$"#,##0.00', date$ = 'mmm d, yyyy';
-  ws.getColumn('startup').numFmt = money$; ws.getColumn('created').numFmt = date$; ws.getColumn('sent').numFmt = date$;
+  ws.getColumn('startup').numFmt = money$; ws.getColumn('created').numFmt = date$; ws.getColumn('install').numFmt = date$; ws.getColumn('sent').numFmt = date$;
   for (let i = 1; i <= maxOpts; i++) ws.getColumn('p' + i).numFmt = money$;
   const statusCol = cols.findIndex(c => c.key === 'status') + 1, list = '"' + STATUSES.map(statusLabel).join(',') + '"';
   const colL = ws.getColumn(statusCol).letter;
@@ -862,9 +882,12 @@ const Sheet = (() => {
   const ymd = t => { if (!t) return ''; const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
   const ymdhm = t => { const d = new Date(t || Date.now()); return `${ymd(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   function row(j) {
-    const r = { 'Job ID': j.id, 'Proposal #': j.proposalNo || '', Customer: j.customer.name, Address: j.customer.address || '', Phone: j.customer.phone || '',
-      Email: j.customer.email || '', Status: statusLabel(j.status), Created: ymd(j.createdAt), 'Date sent': ymd(j.sentAt),
-      'New customer': j.quote.newCustomer ? 'Yes' : 'No', 'Startup fee': 0, 'Last updated': ymdhm(j.updatedAt) };
+    // Option 1-3 are always sent (blank if unused) so the sheet's columns stay in a fixed order.
+    const r = { 'Job ID': j.id, 'Proposal #': j.proposalNo || '', Customer: j.customer.name, Status: statusLabel(j.status),
+      'Install date': j.installDate || '', Payment: PAYMENT_LABEL[j.payment] || 'Not paid' };
+    for (let i = 1; i <= 3; i++) { r[`Option ${i}`] = ''; r[`Option ${i} price`] = ''; }
+    Object.assign(r, { Address: j.customer.address || '', Phone: j.customer.phone || '', Email: j.customer.email || '', Created: ymd(j.createdAt),
+      'Date sent': ymd(j.sentAt), 'New customer': j.quote.newCustomer ? 'Yes' : 'No', 'Startup fee': 0, 'Last updated': ymdhm(j.updatedAt) });
     j.options.forEach((o, i) => {
       const q = computeQuote(viewOf(j, o), S.settings);
       if (i === 0) r['Startup fee'] = q.deposit;
