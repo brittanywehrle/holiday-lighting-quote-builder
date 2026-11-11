@@ -68,7 +68,7 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 - **No minimum job charge.**
 - **Future seasons:** each line repeats at this season's price unless the owners write in a future-season price for that line (Quote tab, "Future seasons" card, per option). Typical use: wreaths and garland drop the materials cost after year one. The startup fee never repeats. `computeQuote` returns `futureTotal`.
 - Saving a proposal **locks the rates** for that job (`quote.snapshot`), so later Settings changes don't alter a sent quote.
-- **Proposal numbers** come from Settings (`nextProposalNo`, starting at 31), are assigned once per job, and increment by one.
+- **Proposal numbers** come from Settings (`nextProposalNo`, starting at 31), are assigned once per job, and increment by one. They're for internal tracking (Excel, Google Sheet) and are **not printed on the PDF** (the owners removed them).
 
 ## Roofr reports
 
@@ -94,7 +94,7 @@ Always compute prices with `computeQuote(viewOf(job, option), S.settings)`. `vie
 
 ## Proposal layout (owner-approved wording)
 
-- **Option pages:** page 1 has the full header (logo, date, proposal number, "Prepared for"). Later option pages use a compact header. Each page shows the mockups (warm white and/or multicolor, or an uploaded AI rendering), the line items, then this line: *"Includes lighting lease, professional installation, timer setup, in-season light maintenance, takedown and storage."*
+- **Option pages:** page 1 has the full header (logo, date, "Valid for 30 days", "Prepared for"; no proposal number). Later option pages and the terms page use a compact header with the company and customer name. Each page shows the mockups (warm white and/or multicolor, or an uploaded AI rendering), the line items, then this line: *"Includes lighting lease, professional installation, timer setup, in-season light maintenance, takedown and storage."*
 - **Totals:** **Total for current season**, then italic **Total for future seasons** (`futureTotal`: the written-in future prices, or each line's current price when blank; never the startup fee).
 - **Green box:** "Due at signing: $349 startup fee to secure your install date." / "The remaining balance is due once installation is complete."
 - **Last page:** the terms (from Settings), a Customer Responsibilities paragraph, then acceptance. With several options it has a checkbox per option and its total.

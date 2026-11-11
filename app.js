@@ -1313,9 +1313,8 @@ function proposalHeader(g, job, shortId, date) {
   else drawLogo(g, M - 40, 70, 560);
   g.font = '700 30px "Noto Sans", sans-serif'; g.fillStyle = '#C1121F'; spaced(g, 'LIGHTING PROPOSAL', PW - M, 150, 6, 'right');
   txt(g, date, PW - M, 205, '600 30px "Noto Sans", sans-serif', '#111111', 'right');
-  txt(g, 'Proposal #' + shortId, PW - M, 250, '400 26px "Noto Sans", sans-serif', '#555555', 'right');
-  txt(g, 'Valid for 30 days', PW - M, 290, '400 26px "Noto Sans", sans-serif', '#555555', 'right');
-  if (c.area) txt(g, 'Serving ' + c.area, PW - M, 330, '400 26px "Noto Sans", sans-serif', '#555555', 'right');
+  txt(g, 'Valid for 30 days', PW - M, 250, '400 26px "Noto Sans", sans-serif', '#555555', 'right');
+  if (c.area) txt(g, 'Serving ' + c.area, PW - M, 290, '400 26px "Noto Sans", sans-serif', '#555555', 'right');
   g.fillStyle = '#D4A537'; g.fillRect(M, 400, PW - 2 * M, 3);
   g.font = '700 22px "Noto Sans", sans-serif'; g.fillStyle = '#8A6A1F'; spaced(g, 'PREPARED FOR', M, 460, 4, 'left');
   txt(g, job.customer.name, M, 520, '800 48px "Noto Serif", Georgia, serif', '#111111');
@@ -1348,7 +1347,7 @@ async function buildOptionPage(job, opt, idx, shortId, date) {
     // later option pages: compact header leaves room for bigger mockups
     g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, PW, PH);
     txt(g, S.settings.company.name, M, 150, '800 36px "Noto Serif", Georgia, serif', '#111111');
-    txt(g, `Proposal #${shortId} · ${job.customer.name}`, PW - M, 150, '400 24px "Noto Sans", sans-serif', '#555555', 'right');
+    txt(g, job.customer.name, PW - M, 150, '400 24px "Noto Sans", sans-serif', '#555555', 'right');
     g.fillStyle = '#D4A537'; g.fillRect(M, 190, PW - 2 * M, 3);
     g.font = '700 22px "Noto Sans", sans-serif'; g.fillStyle = '#C1121F'; spaced(g, oLabel, M, 262, 4, 'left');
     txt(g, oName, M, 326, '800 48px "Noto Serif", Georgia, serif', '#111111');
@@ -1420,7 +1419,7 @@ function buildTermsPage(job, shortId, results) {
   const p2 = document.createElement('canvas'); p2.width = PW; p2.height = PH; const h2 = p2.getContext('2d');
   h2.fillStyle = '#FFFFFF'; h2.fillRect(0, 0, PW, PH);
   txt(h2, c.name, M, 150, '800 36px "Noto Serif", Georgia, serif', '#111111');
-  txt(h2, `Proposal #${shortId} · ${job.customer.name}`, PW - M, 150, '400 24px "Noto Sans", sans-serif', '#555555', 'right');
+  txt(h2, job.customer.name, PW - M, 150, '400 24px "Noto Sans", sans-serif', '#555555', 'right');
   h2.fillStyle = '#D4A537'; h2.fillRect(M, 190, PW - 2 * M, 3);
   txt(h2, 'Terms', M, 290, '800 52px "Noto Serif", Georgia, serif', '#111111');
   let ty = 370;
@@ -1463,7 +1462,7 @@ async function buildProposal(job) {
   if (!PROPOSAL_LOGO) { try { PROPOSAL_LOGO = await loadImg('assets/logo.png'); } catch (e) { PROPOSAL_LOGO = null; } }
   const st = S.settings;
   if (!job.proposalNo) { job.proposalNo = Math.max(1, Math.round(num(st.nextProposalNo, 31))); st.nextProposalNo = job.proposalNo + 1; touchSettings(); touchJob(); }
-  const shortId = String(job.proposalNo);
+  const shortId = String(job.proposalNo); // kept for tracking (Excel, Google Sheet); not printed on the PDF
   const date = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const pages = [];
   for (let i = 0; i < job.options.length; i++) pages.push(await buildOptionPage(job, job.options[i], i, shortId, date));
