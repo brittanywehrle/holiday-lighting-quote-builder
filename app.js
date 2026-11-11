@@ -1103,18 +1103,27 @@ $('#v-quote').addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'roofr-file') { const f = t.files[0]; t.value = ''; if (f) importRoofr(f); }
   else if (t.dataset.roofrPick) { S.job.roofr.pick[t.dataset.roofrPick] = t.checked; touchJob(); renderRoofrCard(); }
+  else if (t.dataset.cust === 'name' && !t.value.trim()) { t.value = S.job.customer.name; toast('A job needs a customer name, so the old one was kept.'); }
 });
 
 /* ---------- quote view ---------- */
 function renderQuote() {
   const job = S.job, q = job.quote, o = cur(job), multi = job.options.length > 1, r = computeQuote(viewOf(job, o), S.settings);
   const fees = r.rates.fees, scope = multi ? ` · Option ${job.options.indexOf(o) + 1}` : '';
-  let h = `<div class="row" style="justify-content:space-between"><h1>Quote · ${esc(job.customer.name)}</h1>
+  let h = `<div class="row" style="justify-content:space-between"><h1>Quote · <span id="q-title">${esc(job.customer.name)}</span></h1>
     ${q.snapshot ? `<span class="row"><span class="pill">Rates locked ${new Date(q.snapshot.at).toLocaleDateString()}</span><button class="btn small" id="btn-unlock">Use current rates</button></span>` : ''}</div>`;
   h += multi ? `<div id="q-opts" style="margin-top:14px"></div>` : `<p class="muted" style="font-size:13px;margin:10px 0 0">Giving this customer choices? Add options on the Trace tab, then price each one here.</p>`;
   if (!r.m.scaled) h += `<div class="warnbox" style="margin-top:12px">No scale set yet, so C9 and garland footage count as 0. Go to Trace and use the Scale tool.</div>`;
   h += `<div class="qgrid">
   ${multi ? `<div class="card" id="q-compare" style="grid-column:1/-1"></div>` : ''}
+  <div class="card"><h2>Customer</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+      <label class="f" for="q-cname">Name<input type="text" id="q-cname" data-cust="name" value="${esc(job.customer.name)}" autocomplete="off"></label>
+      <label class="f" for="q-caddr">Address<input type="text" id="q-caddr" data-cust="address" value="${esc(job.customer.address || '')}" autocomplete="off"></label>
+      <label class="f" for="q-cphone">Phone<input type="tel" id="q-cphone" data-cust="phone" value="${esc(job.customer.phone || '')}" autocomplete="off"></label>
+      <label class="f" for="q-cemail">Email<input type="email" id="q-cemail" data-cust="email" value="${esc(job.customer.email || '')}" autocomplete="off"></label>
+    </div>
+  </div>
   <div class="card"><h2>Pricing${multi ? ' · all options' : ''}</h2>
     <label class="check" for="q-new"><input type="checkbox" id="q-new" data-q="newCustomer" ${q.newCustomer ? 'checked' : ''}> New customer · ${money(r.rates.startup)} startup fee</label>
     <label class="f" for="q-rate" style="margin-top:8px">C9 rate for this job (default ${money(r.rates.rateC9)}/ft)</label>
@@ -1204,6 +1213,15 @@ function renderFutureCard(r, scope) {
 }
 $('#v-quote').addEventListener('input', e => {
   const t = e.target, q = S.job.quote, o = cur();
+  if (t.dataset.cust) {
+    // A blank name is never saved; the last good name stays until a new one is typed.
+    const k = t.dataset.cust, v = t.value.trim();
+    if (k === 'name' && !v) return;
+    S.job.customer[k] = v; touchJob();
+    if (k === 'name') { $('#q-title').textContent = v; $('#jobname').textContent = v; }
+    if (k === 'address') renderRoofrCard();
+    return;
+  }
   if (t.dataset.q) {
     const k = t.dataset.q;
     if (k === 'newCustomer') q.newCustomer = t.checked;
